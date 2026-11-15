@@ -17,7 +17,7 @@ pip install git+https://github.com/HeegerGao/genesis-maniladder.git
 Check that Python imports this build:
 
 ```bash
-python -c "import genesis.vis.camera as c; print(getattr(c, 'RASTERIZER_BATCHED_CAMERA', False))"   # True
+python -c "import genesis, pathlib; print('RASTERIZER_BATCHED_CAMERA' in (pathlib.Path(genesis.__file__).parent / 'vis' / 'camera.py').read_text())"   # True
 ```
 
 ## Changes
