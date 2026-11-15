@@ -15,6 +15,11 @@ from genesis.utils.misc import tensor_to_array
 from genesis.utils.image_exporter import as_grayscale_image
 
 
+# [maniladder-rl] Set by the ManiLadder backport: the Rasterizer renders batched scenes one environment at a time,
+# with one camera pose per environment ('VisOptions.env_separate_rigid=True').
+RASTERIZER_BATCHED_CAMERA = True
+
+
 class Camera(RBC):
     """
     A camera which can be used to render RGB, depth, and segmentation images.
@@ -156,20 +161,25 @@ class Camera(RBC):
                 self._is_batched = False
             else:
                 self._is_batched = self._visualizer.scene.n_envs > 0 and self._visualizer._context.env_separate_rigid
-                if self._is_batched:
-                    gs.logger.warning(
-                        "Batched rendering via 'VisOptions.env_separate_rigid=True' is only partially supported by "
-                        "Rasterizer for now. The same camera transform will be used for all the environments."
+            if self._is_batched:
+                # [maniladder-rl] Backport of upstream #2212 / #2564: with 'env_separate_rigid=True' the Rasterizer
+                # renders one image per environment, each with its own camera pose, so the camera is not bound to
+                # one environment.
+                if self._env_idx is not None:
+                    gs.raise_exception(
+                        "Binding a camera to one specific environment index is not supported by Rasterizer when "
+                        "'VisOptions.env_separate_rigid=True'."
                     )
-            if self._env_idx is None:
-                self._env_idx = int(self._visualizer._context.rendered_envs_idx[0])
-                if self._visualizer.scene.n_envs > 0:
-                    gs.logger.info(
-                        "Raytracer and Rasterizer requires binding to the camera with a specific environment index. "
-                        "Defaulting to 'rendered_envs_idx[0]'. Please specify 'env_idx' if necessary."
-                    )
-            if self._env_idx not in self._visualizer._context.rendered_envs_idx:
-                gs.raise_exception("Environment index bound to the camera not in 'VisOptions.rendered_envs_idx'.")
+            else:
+                if self._env_idx is None:
+                    self._env_idx = int(self._visualizer._context.rendered_envs_idx[0])
+                    if self._visualizer.scene.n_envs > 0:
+                        gs.logger.info(
+                            "Raytracer and Rasterizer requires binding to the camera with a specific environment "
+                            "index. Defaulting to 'rendered_envs_idx[0]'. Please specify 'env_idx' if necessary."
+                        )
+                if self._env_idx not in self._visualizer._context.rendered_envs_idx:
+                    gs.raise_exception("Environment index bound to the camera not in 'VisOptions.rendered_envs_idx'.")
 
         if self._is_batched and self._env_idx is None:
             batch_size = (len(self._visualizer._context.rendered_envs_idx),)
@@ -181,11 +191,12 @@ class Camera(RBC):
         self._transform = torch.empty((*batch_size, 4, 4), dtype=gs.tc_float, device=gs.device)
         self._quat = torch.empty((*batch_size, 4), dtype=gs.tc_float, device=gs.device)
 
-        self._envs_offset = torch.as_tensor(
-            self._visualizer._scene.envs_offset[() if self._env_idx is None else self._env_idx],
-            dtype=gs.tc_float,
-            device=gs.device,
-        )
+        if self._is_batched and self._env_idx is None and self._batch_renderer is None:
+            # [maniladder-rl] One offset per rendered environment, in the order of 'rendered_envs_idx'.
+            envs_offset = self._visualizer._scene.envs_offset[self._visualizer._context.rendered_envs_idx]
+        else:
+            envs_offset = self._visualizer._scene.envs_offset[() if self._env_idx is None else self._env_idx]
+        self._envs_offset = torch.as_tensor(envs_offset, dtype=gs.tc_float, device=gs.device)
 
         # Must consider the building process done before setting initial pose, otherwise it will fail
         self._is_built = True
@@ -215,9 +226,6 @@ class Camera(RBC):
         offset_T : np.ndarray, shape (4, 4)
             The transformation matrix specifying the camera's pose relative to the rigid link.
         """
-        if self._visualizer._context.env_separate_rigid:
-            gs.raise_exception("This method is not supported by Rasterizer when 'VisOptions.env_separate_rigid=True'.")
-
         if self._followed_entity is not None:
             gs.raise_exception("Impossible to attach a camera that is already following an entity.")
 
@@ -249,10 +257,16 @@ class Camera(RBC):
         if self._attached_link is None:
             gs.raise_exception("Camera not attached to any rigid link.")
 
-        link_pos = self._attached_link.get_pos(self._env_idx)
-        link_quat = self._attached_link.get_quat(self._env_idx)
-        if self._env_idx is not None and self._visualizer.scene.n_envs > 0:
-            link_pos, link_quat = link_pos[0], link_quat[0]
+        if self._is_batched and self._env_idx is None and self._batch_renderer is None:
+            # [maniladder-rl] One link pose, hence one camera pose, per rendered environment.
+            rendered_envs_idx = self._visualizer._context.rendered_envs_idx
+            link_pos = self._attached_link.get_pos(rendered_envs_idx)
+            link_quat = self._attached_link.get_quat(rendered_envs_idx)
+        else:
+            link_pos = self._attached_link.get_pos(self._env_idx)
+            link_quat = self._attached_link.get_quat(self._env_idx)
+            if self._env_idx is not None and self._visualizer.scene.n_envs > 0:
+                link_pos, link_quat = link_pos[0], link_quat[0]
         link_T = gu.trans_quat_to_T(link_pos, link_quat)
         transform = torch.matmul(link_T, self._attached_offset_T)
         self.set_pose(transform=transform)
@@ -275,13 +289,13 @@ class Camera(RBC):
             If True, the camera will maintain its orientation relative to the world. If False, the camera will look at
             the base link of the entity.
         """
-        if self._visualizer._context.env_separate_rigid:
-            gs.raise_exception("This method is not supported by Rasterizer when 'VisOptions.env_separate_rigid=True'.")
-
         if self._attached_link is not None:
             gs.raise_exception("Impossible to following an entity with a camera that is already attached.")
 
-        if self._is_built:
+        if self._is_built and self._is_batched and self._env_idx is None and self._batch_renderer is None:
+            # [maniladder-rl] One relative position per rendered environment.
+            pos_rel = self._pos - entity.get_pos(self._visualizer._context.rendered_envs_idx)
+        elif self._is_built:
             env_idx = self._env_idx if self._is_batched and self._env_idx is not None else ()
             pos_rel = self._pos[env_idx] - entity.get_pos(self._env_idx, unsafe=True)
             if self._env_idx is not None:
@@ -333,7 +347,10 @@ class Camera(RBC):
             camera_pos = self._pos[env_idx].clone()
 
         # Query entity and relative camera positions
-        entity_pos = self._followed_entity.get_pos(self._env_idx, unsafe=True)
+        if self._is_batched and self._env_idx is None and self._batch_renderer is None:
+            entity_pos = self._followed_entity.get_pos(self._visualizer._context.rendered_envs_idx)
+        else:
+            entity_pos = self._followed_entity.get_pos(self._env_idx, unsafe=True)
         follow_pos_rel = self._follow_pos_rel
         if not self._is_batched:
             follow_pos_rel = follow_pos_rel.squeeze(0)
@@ -624,9 +641,14 @@ class Camera(RBC):
                 n_envs = len(self._visualizer._context.rendered_envs_idx)
             else:
                 envs_idx = self._visualizer._scene._sanitize_envs_idx(envs_idx)
-                if set(envs_idx).issubset(self._visualizer._context.rendered_envs_idx):
+                envs_idx = [int(i) for i in envs_idx]
+                rendered_envs_idx = list(self._visualizer._context.rendered_envs_idx)
+                if not set(envs_idx).issubset(rendered_envs_idx):
                     gs.raise_exception("Environment index not in 'VisOptions.rendered_envs_idx'.")
                 n_envs = len(envs_idx)
+                if self._batch_renderer is None:
+                    # [maniladder-rl] Rasterizer pose buffers are indexed by position in 'rendered_envs_idx'.
+                    envs_idx = [rendered_envs_idx.index(i) for i in envs_idx]
         else:
             envs_idx = ()
 

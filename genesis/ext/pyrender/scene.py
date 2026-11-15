@@ -603,7 +603,10 @@ class Scene(object):
         return scene_pr
 
     def sorted_mesh_nodes(self):
-        cam_loc = self.get_pose(self.main_camera_node)[:3, 3]
+        cam_loc = self.get_pose(self.main_camera_node)[..., :3, 3]
+        if cam_loc.ndim == 2:
+            # [maniladder-rl] One camera pose per environment: the draw order is shared, use the first one.
+            cam_loc = cam_loc[0]
         solid_nodes = []
         trans_nodes = []
         for node in self.mesh_nodes:
