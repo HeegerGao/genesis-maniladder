@@ -1,3 +1,10 @@
+> **genesis-maniladder.** This is Genesis 0.3.6 (upstream commit `f440479`) with the changes required by the
+> [ManiLadder benchmark](https://github.com/HeegerGao/ManiLadder-Benchmark): per-environment camera images for
+> batched scenes (rigid and deformable bodies), a deterministic draw order, per-environment poses of fixed bodies
+> and inverse kinematics restricted to the requested joints. [MANILADDER.md](MANILADDER.md) lists every change.
+> Install with `pip install git+https://github.com/HeegerGao/genesis-maniladder.git`. The rest of this file is the
+> upstream README.
+
 ![Genesis](imgs/big_text.png)
 
 ![Teaser](imgs/teaser.png)
