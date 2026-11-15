@@ -211,14 +211,24 @@ class RasterizerContext:
             gs.raise_exception(f"Unsupported segmentation level: {self.segmentation_level}")
         self.create_node_seg(seg_key, rigid_node)
 
+    def _tag_node_env(self, node, i_b):
+        # [maniladder-rl] Not in upstream Genesis. Rigid geoms are one mesh with one pose per environment, and with
+        # 'env_separate_rigid' the rasterizer draws the pose of the environment it is rendering. Particle and
+        # deformable bodies are one node per environment instead, and upstream draws all of them into every image.
+        # The node remembers which rendered environment it belongs to; the renderer skips it for the others.
+        if self.env_separate_rigid and i_b is not None:
+            node._env_row = list(self.rendered_envs_idx).index(i_b)
+
     def add_static_node(self, entity, obj, i_b, **kwargs):
         static_node = self.add_node(obj, **kwargs)
+        self._tag_node_env(static_node, i_b)
         self.static_nodes[(i_b, entity.uid)] = static_node
         self.create_node_seg(entity.idx, static_node)
 
-    def add_dynamic_node(self, entity, obj, **kwargs):
+    def add_dynamic_node(self, entity, obj, i_b=None, **kwargs):
         if obj:
             dynamic_node = self.add_node(obj, **kwargs)
+            self._tag_node_env(dynamic_node, i_b)
             self.dynamic_nodes.setdefault(self.scene._t, []).append(dynamic_node)
         else:
             dynamic_node = None
@@ -569,7 +579,7 @@ class RasterizerContext:
                             backend=mpm_entity.surface.recon_backend,
                         )
                         mesh.visual = mu.surface_uvs_to_trimesh_visual(mpm_entity.surface, n_verts=len(mesh.vertices))
-                        self.add_dynamic_node(mpm_entity, pyrender.Mesh.from_trimesh(mesh, smooth=True))
+                        self.add_dynamic_node(mpm_entity, pyrender.Mesh.from_trimesh(mesh, smooth=True), i_b=idx)
 
                     elif mpm_entity.surface.vis_mode == "particle":
                         tfs = np.tile(np.eye(4), (mpm_entity.n_particles, 1, 1))
@@ -583,6 +593,7 @@ class RasterizerContext:
                         self.add_dynamic_node(
                             mpm_entity,
                             pyrender.Mesh.from_trimesh(mpm_entity.vmesh.trimesh, smooth=mpm_entity.surface.smooth),
+                            i_b=idx,
                         )
 
     def on_sph(self):
@@ -637,7 +648,7 @@ class RasterizerContext:
                             backend=sph_entity.surface.recon_backend,
                         )
                         mesh.visual = mu.surface_uvs_to_trimesh_visual(sph_entity.surface, n_verts=len(mesh.vertices))
-                        self.add_dynamic_node(sph_entity, pyrender.Mesh.from_trimesh(mesh, smooth=True))
+                        self.add_dynamic_node(sph_entity, pyrender.Mesh.from_trimesh(mesh, smooth=True), i_b=idx)
 
                     elif sph_entity.surface.vis_mode == "particle":
                         tfs = np.tile(np.eye(4), (sph_entity.n_particles, 1, 1))
@@ -727,7 +738,7 @@ class RasterizerContext:
                             backend=pbd_entity.surface.recon_backend,
                         )
                         mesh.visual = mu.surface_uvs_to_trimesh_visual(pbd_entity.surface, n_verts=len(mesh.vertices))
-                        self.add_dynamic_node(pbd_entity, pyrender.Mesh.from_trimesh(mesh, smooth=True))
+                        self.add_dynamic_node(pbd_entity, pyrender.Mesh.from_trimesh(mesh, smooth=True), i_b=idx)
 
                     # TODO: need to support multi-env visulaization for tet mode (it's using static node)
                     elif pbd_entity.surface.vis_mode == "particle":

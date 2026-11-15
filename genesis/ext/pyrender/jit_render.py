@@ -300,6 +300,9 @@ class JITRenderer:
         self.mode = np.zeros(n, np.int32)
         self.n_instances = np.zeros(n, np.int32)
         self.n_indices = np.zeros(n, np.int32)  # positive: indices, negative: positions
+        # [maniladder-rl] rendered environment a primitive belongs to (-1: all), see RasterizerContext._tag_node_env
+        self.env_row = np.array([getattr(node, "_env_row", -1) for node in node_list], np.int32).reshape(n)
+        self._n_indices_env = {}
 
         floor_existed = False
 
@@ -751,6 +754,17 @@ class JITRenderer:
         self._update_normal_smooth = update_normal_smooth
         self._update_buffer = update_buffer
 
+    def _n_indices_for(self, env_idx):
+        """[maniladder-rl] 'n_indices' for rendering environment 'env_idx': primitives that belong to another
+        environment get zero elements, which makes their draw call a no-op."""
+        if env_idx == -1 or not (self.env_row >= 0).any():
+            return self.n_indices
+        n_indices = self._n_indices_env.get(env_idx)
+        if n_indices is None:
+            other = (self.env_row >= 0) & (self.env_row != env_idx)
+            n_indices = self._n_indices_env[env_idx] = np.where(other, 0, self.n_indices).astype(np.int32)
+        return n_indices
+
     def forward_pass(
         self,
         renderer,
@@ -778,7 +792,7 @@ class JITRenderer:
             self.render_flags,
             self.mode,
             self.n_instances,
-            self.n_indices,
+            self._n_indices_for(env_idx),
             self.light,
             self.shadow_map,
             self.light_matrix,
@@ -805,7 +819,7 @@ class JITRenderer:
             self.pose,
             self.mode,
             self.n_instances,
-            self.n_indices,
+            self._n_indices_for(env_idx),
             V.astype(np.float32, copy=False),
             P.astype(np.float32, copy=False),
             self.render_flags,
@@ -823,7 +837,7 @@ class JITRenderer:
             self.pose,
             self.mode,
             self.n_instances,
-            self.n_indices,
+            self._n_indices_for(env_idx),
             light_matrix.astype(np.float32, copy=False),
             light_pos.astype(np.float32, copy=False),
             self.render_flags,
