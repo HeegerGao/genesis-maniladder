@@ -588,6 +588,9 @@ class RigidEntity(Entity):
             return
 
         self._jacobian = ti.field(dtype=gs.ti_float, shape=(6, self.n_dofs, self._solver._B))
+        # self._jacobian = ti.field(dtype=gs.ti_float, shape=self._solver._batch_shape((6, self.n_dofs)))
+        self.dof_allowed = ti.field(dtype=ti.i32, shape=self.n_dofs)  # 0=False, 1=True
+
 
         # compute joint limit in q space
         q_limit_lower = []
@@ -998,25 +1001,27 @@ class RigidEntity(Entity):
                     i_d = joints_info.dof_start[I_j]
                     I_d = [i_d, i_b] if ti.static(self.solver._options.batch_dofs_info) else i_d
                     i_d_jac = i_d + dof_offset - self._dof_start
-                    rotation = gu.ti_transform_by_quat(dofs_info.motion_ang[I_d], links_state.quat[i_l, i_b])
-                    translation = rotation.cross(tgt_link_pos - links_state.pos[i_l, i_b])
 
-                    self._jacobian[0, i_d_jac, i_b] = translation[0] * pos_mask[0]
-                    self._jacobian[1, i_d_jac, i_b] = translation[1] * pos_mask[1]
-                    self._jacobian[2, i_d_jac, i_b] = translation[2] * pos_mask[2]
-                    self._jacobian[3, i_d_jac, i_b] = rotation[0] * rot_mask[0]
-                    self._jacobian[4, i_d_jac, i_b] = rotation[1] * rot_mask[1]
-                    self._jacobian[5, i_d_jac, i_b] = rotation[2] * rot_mask[2]
+                    if self.dof_allowed[i_d - self._dof_start]:
+                        rotation = gu.ti_transform_by_quat(dofs_info.motion_ang[I_d], links_state.quat[i_l, i_b])
+                        translation = rotation.cross(tgt_link_pos - links_state.pos[i_l, i_b])
+                        self._jacobian[0, i_d_jac, i_b] = translation[0] * pos_mask[0]
+                        self._jacobian[1, i_d_jac, i_b] = translation[1] * pos_mask[1]
+                        self._jacobian[2, i_d_jac, i_b] = translation[2] * pos_mask[2]
+                        self._jacobian[3, i_d_jac, i_b] = rotation[0] * rot_mask[0]
+                        self._jacobian[4, i_d_jac, i_b] = rotation[1] * rot_mask[1]
+                        self._jacobian[5, i_d_jac, i_b] = rotation[2] * rot_mask[2]
 
                 elif joints_info.type[I_j] == gs.JOINT_TYPE.PRISMATIC:
                     i_d = joints_info.dof_start[I_j]
                     I_d = [i_d, i_b] if ti.static(self.solver._options.batch_dofs_info) else i_d
                     i_d_jac = i_d + dof_offset - self._dof_start
-                    translation = gu.ti_transform_by_quat(dofs_info.motion_vel[I_d], links_state.quat[i_l, i_b])
 
-                    self._jacobian[0, i_d_jac, i_b] = translation[0] * pos_mask[0]
-                    self._jacobian[1, i_d_jac, i_b] = translation[1] * pos_mask[1]
-                    self._jacobian[2, i_d_jac, i_b] = translation[2] * pos_mask[2]
+                    if self.dof_allowed[i_d - self._dof_start]:
+                        translation = gu.ti_transform_by_quat(dofs_info.motion_vel[I_d], links_state.quat[i_l, i_b])
+                        self._jacobian[0, i_d_jac, i_b] = translation[0] * pos_mask[0]
+                        self._jacobian[1, i_d_jac, i_b] = translation[1] * pos_mask[1]
+                        self._jacobian[2, i_d_jac, i_b] = translation[2] * pos_mask[2]
 
                 elif joints_info.type[I_j] == gs.JOINT_TYPE.FREE:
                     # translation
@@ -1024,22 +1029,26 @@ class RigidEntity(Entity):
                         i_d = joints_info.dof_start[I_j] + i_d_
                         i_d_jac = i_d + dof_offset - self._dof_start
 
-                        self._jacobian[i_d_, i_d_jac, i_b] = 1.0 * pos_mask[i_d_]
+                        if self.dof_allowed[i_d - self._dof_start]:
+                            self._jacobian[i_d_, i_d_jac, i_b] = 1.0 * pos_mask[i_d_]
 
                     # rotation
                     for i_d_ in ti.static(range(3)):
                         i_d = joints_info.dof_start[I_j] + i_d_ + 3
                         i_d_jac = i_d + dof_offset - self._dof_start
                         I_d = [i_d, i_b] if ti.static(self.solver._options.batch_dofs_info) else i_d
-                        rotation = dofs_info.motion_ang[I_d]
-                        translation = rotation.cross(tgt_link_pos - links_state.pos[i_l, i_b])
-
-                        self._jacobian[0, i_d_jac, i_b] = translation[0] * pos_mask[0]
-                        self._jacobian[1, i_d_jac, i_b] = translation[1] * pos_mask[1]
-                        self._jacobian[2, i_d_jac, i_b] = translation[2] * pos_mask[2]
-                        self._jacobian[3, i_d_jac, i_b] = rotation[0] * rot_mask[0]
-                        self._jacobian[4, i_d_jac, i_b] = rotation[1] * rot_mask[1]
-                        self._jacobian[5, i_d_jac, i_b] = rotation[2] * rot_mask[2]
+                        
+                        
+                        if self.dof_allowed[i_d - self._dof_start]:
+                            # rotation = dofs_info.motion_ang[I_d]
+                            rotation = self._solver.dofs_info.motion_ang[I_d]
+                            translation = rotation.cross(tgt_link_pos - links_state.pos[i_l, i_b])
+                            self._jacobian[0, i_d_jac, i_b] = translation[0] * pos_mask[0]
+                            self._jacobian[1, i_d_jac, i_b] = translation[1] * pos_mask[1]
+                            self._jacobian[2, i_d_jac, i_b] = translation[2] * pos_mask[2]
+                            self._jacobian[3, i_d_jac, i_b] = rotation[0] * rot_mask[0]
+                            self._jacobian[4, i_d_jac, i_b] = rotation[1] * rot_mask[1]
+                            self._jacobian[5, i_d_jac, i_b] = rotation[2] * rot_mask[2]
 
                 dof_offset = dof_offset + joints_info.n_dofs[I_j]
 
@@ -1301,6 +1310,12 @@ class RigidEntity(Entity):
         n_dofs = len(dofs_idx)
         if n_dofs == 0:
             gs.raise_exception("Target dofs not provided.")
+        # add the following lines
+        dof_allowed_array = np.zeros(self.n_dofs, dtype=np.int32)
+        for dof in dofs_idx:
+            dof_allowed_array[dof] = 1
+        self.dof_allowed.from_numpy(dof_allowed_array)
+        # end editing
         links_idx_by_dofs = []
         for link in self.links:
             for joint in link.joints:
