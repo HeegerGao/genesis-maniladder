@@ -1473,7 +1473,13 @@ class RigidSolver(Solver):
             link.is_fixed and (link.geoms or link.vgeoms) for link in (self.links[i_l] for i_l in links_idx)
         )
         if has_fixed_geoms and not (set_all_envs and (torch.diff(pos, dim=0).abs() < gs.EPS).all()):
-            gs.raise_exception("Impossible to set env-specific pos for fixed links with at least one geometry.")
+            # [maniladder-rl] Upstream raises here ("Impossible to set env-specific pos for fixed links with at
+            # least one geometry"). The pose of a fixed link, of its geoms and their bounding boxes is stored per
+            # environment like that of any other link, and collision detection and the rasterizer read exactly that.
+            # Only the world-frame vertices of fixed geoms ('fixed_verts_state', read by 'get_verts', the SAP
+            # coupler and the raycaster sensor) are stored once for all environments; they are flagged as
+            # environment-dependent so that 'get_verts' can refuse to return them.
+            self._env_specific_fixed_poses = True
 
         kernel_set_links_pos(
             relative,
@@ -1524,7 +1530,13 @@ class RigidSolver(Solver):
             link.is_fixed and (link.geoms or link.vgeoms) for link in (self.links[i_l] for i_l in links_idx)
         )
         if has_fixed_geoms and not (set_all_envs and (torch.diff(quat, dim=0).abs() < gs.EPS).all()):
-            gs.raise_exception("Impossible to set env-specific quat for fixed links with at least one geometry.")
+            # [maniladder-rl] Upstream raises here ("Impossible to set env-specific quat for fixed links with at
+            # least one geometry"). The pose of a fixed link, of its geoms and their bounding boxes is stored per
+            # environment like that of any other link, and collision detection and the rasterizer read exactly that.
+            # Only the world-frame vertices of fixed geoms ('fixed_verts_state', read by 'get_verts', the SAP
+            # coupler and the raycaster sensor) are stored once for all environments; they are flagged as
+            # environment-dependent so that 'get_verts' can refuse to return them.
+            self._env_specific_fixed_poses = True
 
         kernel_set_links_quat(
             relative,
