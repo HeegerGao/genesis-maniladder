@@ -30,6 +30,8 @@ CORNER_INDICES = np.array(
 
 
 class Scene(object):
+    _node_counter = 0  # [maniladder-rl] running index of the nodes added to any scene, see _in_creation_order
+
     """A hierarchical scene graph.
 
     Parameters
@@ -161,8 +163,15 @@ class Scene(object):
 
     @property
     def light_nodes(self):
-        """set of :class:`Node` : The nodes containing lights."""
-        return self.point_light_nodes | self.spot_light_nodes | self.directional_light_nodes
+        """list of :class:`Node` : The nodes containing lights, in the order they were added."""
+        # [maniladder-rl] ordered: the light index must not depend on the iteration order of a set
+        return self._in_creation_order(self.point_light_nodes | self.spot_light_nodes | self.directional_light_nodes)
+
+    @staticmethod
+    def _in_creation_order(nodes):
+        """[maniladder-rl] Nodes sorted by the order in which they were added to a scene. Sets of nodes iterate in
+        an order that follows object addresses, hence the allocation history of the process."""
+        return sorted(nodes, key=lambda node: getattr(node, "_creation_index", 0))
 
     @property
     def point_lights(self):
@@ -360,6 +369,9 @@ class Scene(object):
         parent_node : :class:`Node`
             The parent of this Node. If None, the new node is a root node.
         """
+        if not hasattr(node, "_creation_index"):  # [maniladder-rl] see _in_creation_order
+            Scene._node_counter += 1
+            node._creation_index = Scene._node_counter
         if node in self.nodes:
             raise ValueError("Node already in scene")
         self.nodes.add(node)
@@ -609,7 +621,7 @@ class Scene(object):
             cam_loc = cam_loc[0]
         solid_nodes = []
         trans_nodes = []
-        for node in self.mesh_nodes:
+        for node in self._in_creation_order(self.mesh_nodes):  # [maniladder-rl] deterministic draw order
             mesh = node.mesh
             if mesh.is_transparent:
                 trans_nodes.append(node)
